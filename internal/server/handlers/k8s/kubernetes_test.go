@@ -120,6 +120,56 @@ func TestStorageClasses(t *testing.T) {
 			},
 			result: []string{"local-storage", "another-storage", "cool-storage"},
 		},
+		{
+			name: "default annotation set to false is not swapped",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "cool-storage",
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "slow-storage",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: "false",
+							},
+						},
+					},
+				},
+			},
+			result: []string{"cool-storage", "slow-storage"},
+		},
+		{
+			name: "default annotation false does not displace true",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "cool-storage",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: "true",
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "slow-storage",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: "false",
+							},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "another-storage",
+						},
+					},
+				},
+			},
+			result: []string{"cool-storage", "slow-storage", "another-storage"},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

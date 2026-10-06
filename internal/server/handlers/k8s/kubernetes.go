@@ -34,7 +34,8 @@ import (
 )
 
 const (
-	annotationStorageClassDefault = "storageclass.kubernetes.io/is-default-class"
+	annotationStorageClassDefault      = "storageclass.kubernetes.io/is-default-class"
+	annotationStorageClassDefaultValue = "true"
 )
 
 func (h *k8sHandler) GetKubernetesClusterResources(ctx context.Context) (*api.KubernetesClusterResources, error) {
@@ -120,7 +121,7 @@ func storageClasses(storagesList *storagev1.StorageClassList) []string {
 	swap := reflect.Swapper(classNames)
 	for i, storageClass := range storagesList.Items {
 		classNames[i] = storageClass.Name
-		if _, ok := storageClass.Annotations[annotationStorageClassDefault]; ok {
+		if storageClass.Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue {
 			if i != 0 {
 				swap(i, 0)
 			}
