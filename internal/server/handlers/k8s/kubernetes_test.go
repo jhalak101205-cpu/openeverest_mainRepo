@@ -16,6 +16,7 @@ package k8s
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	storagev1 "k8s.io/api/storage/v1"
@@ -24,6 +25,7 @@ import (
 
 func TestStorageClasses(t *testing.T) {
 	t.Parallel()
+	now := time.Now()
 	testCases := []struct {
 		name         string
 		storagesList *storagev1.StorageClassList
@@ -169,6 +171,108 @@ func TestStorageClasses(t *testing.T) {
 				},
 			},
 			result: []string{"cool-storage", "slow-storage", "another-storage"},
+		},
+		{
+			name:         "nil storagesList returns empty slice",
+			storagesList: nil,
+			result:       []string{},
+		},
+		{
+			name:         "empty storagesList returns empty slice",
+			storagesList: &storagev1.StorageClassList{},
+			result:       []string{},
+		},
+		{
+			name: "multiple defaults picks the most recently created (newest is last)",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "old-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now.Add(-2 * time.Hour)},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "standard-storage",
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "new-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			result: []string{"new-default", "standard-storage", "old-default"},
+		},
+		{
+			name: "multiple defaults picks the most recently created (newest is first)",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "newest-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "older-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Hour)},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "oldest-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now.Add(-3 * time.Hour)},
+						},
+					},
+				},
+			},
+			result: []string{"newest-default", "older-default", "oldest-default"},
+		},
+		{
+			name: "multiple defaults with equal timestamps preserves deterministic order",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "first-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "second-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			result: []string{"first-default", "second-default"},
 		},
 	}
 	for _, tc := range testCases {
