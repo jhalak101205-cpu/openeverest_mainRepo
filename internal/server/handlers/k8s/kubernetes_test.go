@@ -120,7 +120,7 @@ func TestStorageClasses(t *testing.T) {
 					},
 				},
 			},
-			result: []string{"local-storage", "another-storage", "cool-storage"},
+			result: []string{"local-storage", "cool-storage", "another-storage"},
 		},
 		{
 			name: "default annotation set to false is not swapped",
@@ -211,7 +211,7 @@ func TestStorageClasses(t *testing.T) {
 					},
 				},
 			},
-			result: []string{"new-default", "standard-storage", "old-default"},
+			result: []string{"new-default", "old-default", "standard-storage"},
 		},
 		{
 			name: "multiple defaults picks the most recently created (newest is first)",
@@ -273,6 +273,42 @@ func TestStorageClasses(t *testing.T) {
 				},
 			},
 			result: []string{"first-default", "second-default"},
+		},
+		{
+			name: "multiple defaults interspersed with non-defaults groups defaults first",
+			storagesList: &storagev1.StorageClassList{
+				Items: []storagev1.StorageClass{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "storage-a",
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "old-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now.Add(-1 * time.Hour)},
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "storage-b",
+						},
+					},
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name: "new-default",
+							Annotations: map[string]string{
+								annotationStorageClassDefault: annotationStorageClassDefaultValue,
+							},
+							CreationTimestamp: metav1.Time{Time: now},
+						},
+					},
+				},
+			},
+			result: []string{"new-default", "old-default", "storage-a", "storage-b"},
 		},
 	}
 	for _, tc := range testCases {

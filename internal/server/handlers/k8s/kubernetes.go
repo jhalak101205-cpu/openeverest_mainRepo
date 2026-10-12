@@ -19,7 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
+	"sort"
 
 	"github.com/AlekSi/pointer"
 	corev1 "k8s.io/api/core/v1"
@@ -116,26 +116,36 @@ func (h *k8sHandler) GetSettings(ctx context.Context) (*api.Settings, error) {
 	}, nil
 }
 
+// storageClasses extracts the names of StorageClasses, placing default StorageClasses
+// at the beginning of the list (ordered by CreationTimestamp descending, with the most
+// recently created default at index 0 to match Kubernetes PVC default resolution behavior),
+// followed by non-default StorageClasses preserving their original order.
 func storageClasses(storagesList *storagev1.StorageClassList) []string {
 	if storagesList == nil || len(storagesList.Items) == 0 {
 		return []string{}
 	}
 
-	classNames := make([]string, len(storagesList.Items))
-	defaultIdx := -1
-	for i, storageClass := range storagesList.Items {
-		classNames[i] = storageClass.Name
-		if storageClass.Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue {
-			if defaultIdx == -1 || storageClass.CreationTimestamp.After(storagesList.Items[defaultIdx].CreationTimestamp.Time) {
-				defaultIdx = i
-			}
+	defaults := make([]storagev1.StorageClass, 0)
+	nonDefaults := make([]string, 0, len(storagesList.Items))
+
+	for _, sc := range storagesList.Items {
+		if sc.Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue {
+			defaults = append(defaults, sc)
+		} else {
+			nonDefaults = append(nonDefaults, sc.Name)
 		}
 	}
 
-	if defaultIdx > 0 {
-		swap := reflect.Swapper(classNames)
-		swap(defaultIdx, 0)
+	// Order defaults newest first. Equal timestamps preserve original order (stable sort).
+	sort.SliceStable(defaults, func(i, j int) bool {
+		return defaults[i].CreationTimestamp.After(defaults[j].CreationTimestamp.Time)
+	})
+
+	classNames := make([]string, 0, len(storagesList.Items))
+	for _, sc := range defaults {
+		classNames = append(classNames, sc.Name)
 	}
+	classNames = append(classNames, nonDefaults...)
 
 	return classNames
 }
