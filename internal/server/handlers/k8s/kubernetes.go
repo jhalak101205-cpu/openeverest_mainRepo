@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/AlekSi/pointer"
@@ -125,27 +126,24 @@ func storageClasses(storagesList *storagev1.StorageClassList) []string {
 		return []string{}
 	}
 
-	defaults := make([]storagev1.StorageClass, 0)
-	nonDefaults := make([]string, 0, len(storagesList.Items))
+	items := slices.Clone(storagesList.Items)
+	sort.SliceStable(items, func(i, j int) bool {
+		iDefault := items[i].Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue
+		jDefault := items[j].Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue
 
-	for _, sc := range storagesList.Items {
-		if sc.Annotations[annotationStorageClassDefault] == annotationStorageClassDefaultValue {
-			defaults = append(defaults, sc)
-		} else {
-			nonDefaults = append(nonDefaults, sc.Name)
+		if iDefault != jDefault {
+			return iDefault
 		}
-	}
-
-	// Order defaults newest first. Equal timestamps preserve original order (stable sort).
-	sort.SliceStable(defaults, func(i, j int) bool {
-		return defaults[i].CreationTimestamp.After(defaults[j].CreationTimestamp.Time)
+		if iDefault {
+			return items[i].CreationTimestamp.After(items[j].CreationTimestamp.Time)
+		}
+		return false
 	})
 
-	classNames := make([]string, 0, len(storagesList.Items))
-	for _, sc := range defaults {
-		classNames = append(classNames, sc.Name)
+	classNames := make([]string, len(items))
+	for i, sc := range items {
+		classNames[i] = sc.Name
 	}
-	classNames = append(classNames, nonDefaults...)
 
 	return classNames
 }
