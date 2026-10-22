@@ -77,6 +77,8 @@ jobs:
               # The pipeline itself, shared actions, and files both areas build with.
               .github/workflows/ci.yaml|.github/workflows/dev-fe-browser-tests.yaml|.github/workflows/dev-fe-e2e.yaml|.github/actions/*|Makefile|dev/*)
                 backend=true; frontend=true; workflows=true ;;
+              # UI schema cases tested by both the Go validator and the UI.
+              provider-runtime/uischema/testdata/*) backend=true; frontend=true ;;
               # Other automation: lint it, but don't run the product suites.
               .github/*) workflows=true ;;
               *) backend=true ;;
@@ -244,7 +246,7 @@ jobs:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Fork PRs get a read-only token: inline PR reviews cannot be posted,
           # but workflow-command annotations render for everyone.
-          REPORTER: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'github-annotations' || 'github-pr-review' }}
+          REPORTER: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'github-pr-annotations' || 'github-pr-review' }}
         run: |
           # Stub the embedded UI build output so `//go:embed dist/*` typechecks (see `make build`/`make test`).
           mkdir -p ./public/dist && [ -f ./public/dist/index.html ] || touch ./public/dist/index.html
@@ -255,12 +257,14 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         env:
           REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPORTER: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'github-annotations' || 'github-pr-review' }}
+          REPORTER: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'github-pr-annotations' || 'github-pr-review' }}
         run: |
-          # Incremental via reviewdog: the full tree carries a 400+ finding
-          # backlog (mostly generated files, which go-consistent cannot exclude).
+          # Incremental via reviewdog: the full tree carries a large backlog.
+          # go-consistent cannot exclude files, so controller-gen output is
+          # dropped here: every new pointer field makes it emit a `new(T)`.
           mkdir -p ./public/dist && [ -f ./public/dist/index.html ] || touch ./public/dist/index.html
           go tool go-consistent ./... \
+            | { grep -v '/zz_generated\.' || true; } \
             | go tool reviewdog -efm='%f:%l:%c: %m' -reporter="$REPORTER" -filter-mode=added -fail-level=any
 
       # Full-tree lint as a nightly ratchet input (and toolchain-bump canary):

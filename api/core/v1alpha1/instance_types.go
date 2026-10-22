@@ -273,6 +273,49 @@ type InstanceBackupStorage struct {
 	PITR *InstanceBackupStoragePITR `json:"pitr,omitempty"`
 }
 
+// BackupScheduleRetentionType selects how a schedule's retention is expressed.
+//
+// +kubebuilder:validation:Enum=count;time
+type BackupScheduleRetentionType string
+
+const (
+	// BackupScheduleRetentionTypeCount keeps the N most recent backups.
+	BackupScheduleRetentionTypeCount BackupScheduleRetentionType = "count"
+	// BackupScheduleRetentionTypeTime keeps backups inside a recovery window
+	// expressed as Nd/Nw/Nm.
+	BackupScheduleRetentionTypeTime BackupScheduleRetentionType = "time"
+)
+
+// BackupScheduleRetention configures how backups produced by a schedule are
+// retained. Type selects which field is meaningful:
+//   - count: keep Count recent backups (Count >= 1)
+//   - time:  keep backups within Duration (e.g. "30d", "4w", "2m")
+//
+// Omit Retention on the schedule to keep all backups.
+//
+// +kubebuilder:validation:XValidation:rule="self.type == 'count' ? has(self.count) : true",message="count is required when retention type is count"
+// +kubebuilder:validation:XValidation:rule="self.type == 'count' ? !has(self.duration) : true",message="duration is only allowed when retention type is time"
+// +kubebuilder:validation:XValidation:rule="self.type == 'time' ? !has(self.count) : true",message="count is only allowed when retention type is count"
+// +kubebuilder:validation:XValidation:rule="self.type == 'time' ? has(self.duration) : true",message="duration is required when retention type is time"
+type BackupScheduleRetention struct {
+	// Type selects count-based or time-based retention.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:default=count
+	Type BackupScheduleRetentionType `json:"type"`
+	// Count is the number of recent backups to keep when Type is count.
+	// Required when Type is count (minimum 1). Forbidden when Type is time.
+	// Omit Retention on the schedule to keep all backups.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	Count *int32 `json:"count,omitempty"`
+	// Duration is the recovery window when Type is time, in the form
+	// <positive-integer><unit> where unit is d (days), w (weeks), or m
+	// (months) — e.g. "30d", "4w", "2m". Forbidden when Type is count.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[1-9][0-9]*[dwm]$`
+	Duration string `json:"duration,omitempty"`
+}
+
 // InstanceBackupSchedule configures a recurring backup task on the engine
 // for the parent storage. The provider translates each schedule into the
 // engine's native scheduler (e.g. PSMDB BackupTaskSpec, PXC
@@ -296,12 +339,10 @@ type InstanceBackupSchedule struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Cron string `json:"cron"`
-	// RetentionCopies is the number of recent backups to keep for this
-	// schedule. Zero (or unset) means "keep all". Negative values are
-	// rejected.
-	// +kubebuilder:validation:Minimum=0
+	// Retention configures count-based or time-based backup retention for
+	// this schedule. Unset keeps all backups.
 	// +optional
-	RetentionCopies int32 `json:"retentionCopies,omitempty"`
+	Retention *BackupScheduleRetention `json:"retention,omitempty"`
 	// Parameters is schedule-specific structured configuration validated
 	// against the BackupClass's .spec.parametersSchema. When unset the
 	// provider falls back to engine defaults. The schema is the same as for
@@ -341,8 +382,6 @@ type TopologySpec struct {
 }
 
 type ComponentSpec struct {
-	// Name of the component.
-	Name string `json:"name,omitempty"`
 	// Type of the component from the Provider.
 	Type string `json:"type,omitempty"`
 	// Version of the component from ComponentVersions.
@@ -410,12 +449,12 @@ type Storage struct {
 	StorageClass *string           `json:"storageClass,omitempty"`
 }
 
-// GetComponentsOfType returns all components that match the given type.
-func (in *Instance) GetComponentsOfType(t string) []ComponentSpec {
-	var result []ComponentSpec
-	for _, c := range in.Spec.Components {
+// GetComponentsOfType returns the components of the given type, keyed by name.
+func (in *Instance) GetComponentsOfType(t string) map[string]ComponentSpec {
+	result := make(map[string]ComponentSpec)
+	for name, c := range in.Spec.Components {
 		if c.Type == t {
-			result = append(result, c)
+			result[name] = c
 		}
 	}
 	return result
@@ -472,6 +511,12 @@ func (sr *SourceRanges) NormalizedSourceRanges() SourceRanges {
 
 // InstanceStatus defines the observed state of Instance.
 type InstanceStatus struct {
+	// ObservedGeneration is the metadata.generation the provider-runtime last
+	// reconciled. Status describes an older spec while it is lower than
+	// metadata.generation.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// Phase of the database cluster.
 	Phase InstancePhase `json:"phase,omitempty"`
 
@@ -502,7 +547,11 @@ type InstanceStatus struct {
 	//
 	// +optional
 	ConnectionSecretRef *common.SecretRef `json:"connectionSecretRef,omitempty"`
-	// Components is the status of the components in the database cluster.
+	// Components reports how many pods each component has and how many are Ready.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=name
 	Components []ComponentStatus `json:"components,omitempty"`
 
 	// Message is a custom user-facing message describing the current state of the instance.
@@ -670,6 +719,14 @@ const (
 
 // Condition types for Instance.
 const (
+	// ConditionReady summarises the Instance for kubectl wait, Argo CD and
+	// Flux. It is False with reason ProviderNotFound, UserSecretNotFound or
+	// ValidationFailed while one of them blocks the Instance, whatever the
+	// phase. Otherwise it is True when the phase is Ready and neither
+	// BackupConfigured nor DataSourceReady is False; else it is False with the
+	// reason and message of the False condition, or with the phase as reason.
+	ConditionReady = "Ready"
+
 	// ConditionConnectionDetailsReady indicates whether the connection
 	// details Secret has been populated by the provider.
 	ConditionConnectionDetailsReady = "ConnectionDetailsReady"
@@ -715,6 +772,64 @@ const (
 	// and False once nothing is held. The database keeps running while the
 	// condition is True — a held action never affects availability.
 	ConditionMaintenancePending = "MaintenancePending"
+
+	// ConditionPodsScheduled is False once a pod has waited more than a minute
+	// for a node, for example because a required anti-affinity needs more
+	// nodes than the cluster has. The message has one line per affected
+	// component and quotes the scheduler. Only set when the provider labels
+	// its pods.
+	ConditionPodsScheduled = "PodsScheduled"
+
+	// ConditionPodsReady is False while a pod is not Ready. The reason names
+	// the worst problem found: CrashLoopBackOff, ImagePullBackOff,
+	// CreateContainerConfigError, then NotReady. The message has one line per
+	// affected component. Only set when the provider labels its pods.
+	ConditionPodsReady = "PodsReady"
+)
+
+// Reasons for the Ready condition. Ready=True uses ReasonReady.
+const (
+	// ReasonProviderNotFound indicates the Provider named by
+	// spec.providerRef does not exist. The provider is not called.
+	ReasonProviderNotFound = "ProviderNotFound"
+
+	// ReasonUserSecretNotFound indicates the Secret named by
+	// spec.userSecretRef does not exist. The provider is not called, so a new
+	// Instance waits instead of being seeded with generated credentials.
+	ReasonUserSecretNotFound = "UserSecretNotFound"
+
+	// ReasonValidationFailed indicates the provider rejected the spec. The
+	// message carries the provider's error.
+	ReasonValidationFailed = "ValidationFailed"
+)
+
+// Reasons for the PodsScheduled condition.
+const (
+	// ReasonScheduled indicates no pod has waited more than a minute for a node.
+	ReasonScheduled = "Scheduled"
+
+	// ReasonUnschedulable indicates a pod fits no node.
+	ReasonUnschedulable = "Unschedulable"
+)
+
+// Reasons for the PodsReady condition.
+const (
+	// ReasonReady indicates every pod is Ready.
+	ReasonReady = "Ready"
+
+	// ReasonCrashLoopBackOff indicates a container keeps exiting after it starts.
+	ReasonCrashLoopBackOff = "CrashLoopBackOff"
+
+	// ReasonImagePullBackOff indicates a container image cannot be pulled.
+	ReasonImagePullBackOff = "ImagePullBackOff"
+
+	// ReasonCreateContainerConfigError indicates a container cannot be created,
+	// typically because a Secret or ConfigMap it uses is missing.
+	ReasonCreateContainerConfigError = "CreateContainerConfigError"
+
+	// ReasonNotReady indicates a pod is not Ready for no reason listed above,
+	// for example while it starts.
+	ReasonNotReady = "NotReady"
 )
 
 // Reasons for the MaintenancePending condition.
@@ -736,6 +851,28 @@ const (
 	// action's token (for actions auto-approved by autoApproveUpTo), or
 	// clear and re-set it.
 	ReasonRetriesExhausted = "RetriesExhausted"
+)
+
+// Reasons for the BackupConfigured condition set by the provider-runtime before
+// it calls the provider. Providers set their own reasons through
+// BackupConfigError.
+const (
+	// ReasonBackupClassNotFound indicates the BackupClass named by
+	// spec.backup.classRef does not exist.
+	ReasonBackupClassNotFound = "BackupClassNotFound"
+
+	// ReasonBackupClassIncompatible indicates the BackupClass named by
+	// spec.backup.classRef is not ProviderManaged or does not list the
+	// Instance's provider in spec.supportedProviders.
+	ReasonBackupClassIncompatible = "BackupClassIncompatible"
+
+	// ReasonBackupStorageNotFound indicates a BackupStorage named in
+	// spec.backup.storages does not exist in the Instance's namespace.
+	ReasonBackupStorageNotFound = "BackupStorageNotFound"
+
+	// ReasonBackupStorageCredentialsNotFound indicates the credentials
+	// Secret of a BackupStorage named in spec.backup.storages does not exist.
+	ReasonBackupStorageCredentialsNotFound = "BackupStorageCredentialsNotFound"
 )
 
 // Reasons for the DataSourceReady condition.
@@ -851,13 +988,20 @@ const (
 	ReasonUpgradeFailed = "UpgradeFailed"
 )
 
+// ComponentStatus counts the pods of one component.
 type ComponentStatus struct {
-	// PodRefs references the Pods backing this component.
+	// Name is a key of spec.components.
+	Name string `json:"name"`
+	// Selector selects the component's pods in the Instance's namespace, in
+	// the form kubectl get pods -l accepts.
 	// +optional
-	PodRefs []common.ObjectRef `json:"podRefs,omitempty"`
-	Total   *int32             `json:"total,omitempty"`
-	Ready   *int32             `json:"ready,omitempty"`
-	State   string             `json:"state,omitempty"`
+	Selector string `json:"selector,omitempty"`
+	// Replicas is the number of the component's pods that are not terminating.
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+	// ReadyReplicas is the number of those pods that are Ready.
+	// +optional
+	ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -866,6 +1010,8 @@ type ComponentStatus struct {
 // +kubebuilder:printcolumn:name="Provider",type="string",JSONPath=".spec.providerRef.name"
 // +kubebuilder:printcolumn:name="Version",type="string",JSONPath=".status.version"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].status"
+// +kubebuilder:printcolumn:name="Reason",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].reason"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:printcolumn:name="Topology",type="string",JSONPath=".spec.topology.type",priority=1
 // +kubebuilder:printcolumn:name="Message",type="string",JSONPath=".status.message",priority=1

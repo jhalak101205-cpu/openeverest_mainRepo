@@ -181,6 +181,7 @@ func (e BackupImportStatusConditionsStatus) Valid() bool {
 const (
 	BackupImportStatusStateError     BackupImportStatusState = "Error"
 	BackupImportStatusStateFailed    BackupImportStatusState = "Failed"
+	BackupImportStatusStatePending   BackupImportStatusState = "Pending"
 	BackupImportStatusStateSucceeded BackupImportStatusState = "Succeeded"
 )
 
@@ -190,6 +191,8 @@ func (e BackupImportStatusState) Valid() bool {
 	case BackupImportStatusStateError:
 		return true
 	case BackupImportStatusStateFailed:
+		return true
+	case BackupImportStatusStatePending:
 		return true
 	case BackupImportStatusStateSucceeded:
 		return true
@@ -273,6 +276,24 @@ func (e InstalledExtensionStatusPhase) Valid() bool {
 	case InstalledExtensionStatusPhaseUninstalling:
 		return true
 	case InstalledExtensionStatusPhaseUpgrading:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstanceSpecBackupStoragesSchedulesRetentionType.
+const (
+	InstanceSpecBackupStoragesSchedulesRetentionTypeCount InstanceSpecBackupStoragesSchedulesRetentionType = "count"
+	InstanceSpecBackupStoragesSchedulesRetentionTypeTime  InstanceSpecBackupStoragesSchedulesRetentionType = "time"
+)
+
+// Valid indicates whether the value is a known member of the InstanceSpecBackupStoragesSchedulesRetentionType enum.
+func (e InstanceSpecBackupStoragesSchedulesRetentionType) Valid() bool {
+	switch e {
+	case InstanceSpecBackupStoragesSchedulesRetentionTypeCount:
+		return true
+	case InstanceSpecBackupStoragesSchedulesRetentionTypeTime:
 		return true
 	default:
 		return false
@@ -453,6 +474,24 @@ func (e InstanceStatusPhase) Valid() bool {
 	case InstanceStatusPhaseTerminating:
 		return true
 	case InstanceStatusPhaseUpdating:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InstancePresetSpecBackupStoragesSchedulesRetentionType.
+const (
+	InstancePresetSpecBackupStoragesSchedulesRetentionTypeCount InstancePresetSpecBackupStoragesSchedulesRetentionType = "count"
+	InstancePresetSpecBackupStoragesSchedulesRetentionTypeTime  InstancePresetSpecBackupStoragesSchedulesRetentionType = "time"
+)
+
+// Valid indicates whether the value is a known member of the InstancePresetSpecBackupStoragesSchedulesRetentionType enum.
+func (e InstancePresetSpecBackupStoragesSchedulesRetentionType) Valid() bool {
+	switch e {
+	case InstancePresetSpecBackupStoragesSchedulesRetentionTypeCount:
+		return true
+	case InstancePresetSpecBackupStoragesSchedulesRetentionTypeTime:
 		return true
 	default:
 		return false
@@ -774,6 +813,26 @@ type Backup struct {
 				// is unique within its storage and is used for restore.
 				Path string `json:"path"`
 
+				// SourceMetadata SourceMetadata is engine-specific metadata that is used to make
+				// compatibility decisions for creating an Instance from this Backup.
+				SourceMetadata *struct {
+					// BackupType BackupType is the backup method recorded (e.g. "logical" or "physical"
+					// for PBM).
+					BackupType *string `json:"backupType,omitempty"`
+
+					// EngineVersion EngineVersion is the engine version recorded in the backup.
+					// Its granularity may be whatever the backup metadata records, so it
+					// may be a full version (e.g. a MongoDB server version like "8.0.12-4",
+					// a Percona XtraDB Cluster server version like "8.4.8-8.1") or only a
+					// major version (e.g. a PostgreSQL version like "18").
+					EngineVersion *string `json:"engineVersion,omitempty"`
+
+					// Topology Topology names the source Instance's topology (e.g. "replicaSet" or
+					// "sharded" for PSMDB). Recorded only for backups taken by a
+					// ProviderManaged backup class.
+					Topology *string `json:"topology,omitempty"`
+				} `json:"sourceMetadata,omitempty"`
+
 				// StartedAt StartedAt is the time when the backup started.
 				StartedAt time.Time `json:"startedAt"`
 			} `json:"external,omitempty"`
@@ -881,6 +940,27 @@ type Backup struct {
 		// Size Size is the size of the backup data as reported by the engine.
 		// Empty for external backups.
 		Size *string `json:"size,omitempty"`
+
+		// SourceMetadata SourceMetadata is the source Instance metadata recorded with the backup.
+		// For external backups this mirrors spec.origin.external.sourceMetadata;
+		// for Instance-origin backups the provider populates it from the engine.
+		SourceMetadata *struct {
+			// BackupType BackupType is the backup method recorded (e.g. "logical" or "physical"
+			// for PBM).
+			BackupType *string `json:"backupType,omitempty"`
+
+			// EngineVersion EngineVersion is the engine version recorded in the backup.
+			// Its granularity may be whatever the backup metadata records, so it
+			// may be a full version (e.g. a MongoDB server version like "8.0.12-4",
+			// a Percona XtraDB Cluster server version like "8.4.8-8.1") or only a
+			// major version (e.g. a PostgreSQL version like "18").
+			EngineVersion *string `json:"engineVersion,omitempty"`
+
+			// Topology Topology names the source Instance's topology (e.g. "replicaSet" or
+			// "sharded" for PSMDB). Recorded only for backups taken by a
+			// ProviderManaged backup class.
+			Topology *string `json:"topology,omitempty"`
+		} `json:"sourceMetadata,omitempty"`
 
 		// StartedAt StartedAt is the time when the backup started.
 		// For external backups this mirrors spec.origin.external.startedAt.
@@ -1164,6 +1244,10 @@ type BackupClass struct {
 		// supports. The Instance.spec.provider must appear in this list for the
 		// class to be usable on that Instance.
 		SupportedProviders *[]string `json:"supportedProviders,omitempty"`
+
+		// SupportsImport SupportsImport indicates whether the owner of this class can discover and
+		// import restorable backups already sitting in a BackupStorage.
+		SupportsImport *bool `json:"supportsImport,omitempty"`
 
 		// UiSchema UISchema contains free-form rendering hints for the frontend forms that
 		// configure backup, restore, and PITR for an Instance using this class.
@@ -1681,10 +1765,22 @@ type Instance struct {
 					// per-backup-run.
 					Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
-					// RetentionCopies RetentionCopies is the number of recent backups to keep for this
-					// schedule. Zero (or unset) means "keep all". Negative values are
-					// rejected.
-					RetentionCopies *int32 `json:"retentionCopies,omitempty"`
+					// Retention Retention configures count-based or time-based backup retention for
+					// this schedule. Unset keeps all backups.
+					Retention *struct {
+						// Count Count is the number of recent backups to keep when Type is count.
+						// Required when Type is count (minimum 1). Forbidden when Type is time.
+						// Omit Retention on the schedule to keep all backups.
+						Count *int32 `json:"count,omitempty"`
+
+						// Duration Duration is the recovery window when Type is time, in the form
+						// <positive-integer><unit> where unit is d (days), w (weeks), or m
+						// (months) — e.g. "30d", "4w", "2m". Forbidden when Type is count.
+						Duration *string `json:"duration,omitempty"`
+
+						// Type Type selects count-based or time-based retention.
+						Type InstanceSpecBackupStoragesSchedulesRetentionType `json:"type"`
+					} `json:"retention,omitempty"`
 				} `json:"schedules,omitempty"`
 
 				// StorageRef StorageRef references a BackupStorage in the same namespace. The
@@ -1705,9 +1801,6 @@ type Instance struct {
 			// When unspecified, it is autmatically set from the ComponentVersions
 			// based on the Version specified.
 			Image *string `json:"image,omitempty"`
-
-			// Name Name of the component.
-			Name *string `json:"name,omitempty"`
 
 			// Parameters Parameters contains component-specific structured parameters, validated
 			// against the provider's components[].parametersSchema. Engine
@@ -1757,6 +1850,8 @@ type Instance struct {
 				// Affinity Affinity constrains node selection, pod co-location and pod
 				// anti-affinity (spreading pods across nodes, zones or other topology
 				// domains for high availability).
+				// When omitted, the provider applies its default, which may require each
+				// replica on its own node; an empty affinity ({}) sets no constraints.
 				Affinity *struct {
 					// NodeAffinity Describes node affinity scheduling rules for the pod.
 					NodeAffinity *struct {
@@ -2299,7 +2394,9 @@ type Instance struct {
 				} `json:"tolerations,omitempty"`
 
 				// TopologySpreadConstraints TopologySpreadConstraints describe how the pods spread across topology
-				// domains. All constraints are ANDed.
+				// domains. A constraint with neither labelSelector nor matchLabelKeys counts
+				// this component's pods. When omitted, the provider applies its default; an
+				// empty list sets no constraints.
 				TopologySpreadConstraints *[]struct {
 					// LabelSelector LabelSelector is used to find matching pods.
 					// Pods that match this label selector are counted to determine the number of pods
@@ -2647,16 +2744,20 @@ type Instance struct {
 			} `json:"storages,omitempty"`
 		} `json:"backup,omitempty"`
 
-		// Components Components is the status of the components in the database cluster.
+		// Components Components reports how many pods each component has and how many are Ready.
 		Components *[]struct {
-			// PodRefs PodRefs references the Pods backing this component.
-			PodRefs *[]struct {
-				// Name Name of the referenced object.
-				Name string `json:"name"`
-			} `json:"podRefs,omitempty"`
-			Ready *int32  `json:"ready,omitempty"`
-			State *string `json:"state,omitempty"`
-			Total *int32  `json:"total,omitempty"`
+			// Name Name is a key of spec.components.
+			Name string `json:"name"`
+
+			// ReadyReplicas ReadyReplicas is the number of those pods that are Ready.
+			ReadyReplicas *int32 `json:"readyReplicas,omitempty"`
+
+			// Replicas Replicas is the number of the component's pods that are not terminating.
+			Replicas *int32 `json:"replicas,omitempty"`
+
+			// Selector Selector selects the component's pods in the Instance's namespace, in
+			// the form kubectl get pods -l accepts.
+			Selector *string `json:"selector,omitempty"`
 		} `json:"components,omitempty"`
 		Conditions *[]struct {
 			// LastTransitionTime lastTransitionTime is the last time the condition transitioned from one status to another.
@@ -2706,6 +2807,11 @@ type Instance struct {
 		// Message Message is a custom user-facing message describing the current state of the instance.
 		Message *string `json:"message,omitempty"`
 
+		// ObservedGeneration ObservedGeneration is the metadata.generation the provider-runtime last
+		// reconciled. Status describes an older spec while it is lower than
+		// metadata.generation.
+		ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
+
 		// PendingMaintenance PendingMaintenance lists the disruptive actions currently held awaiting
 		// approval. It is recomputed on every reconcile from the actions the
 		// provider currently requests above the Instance's tolerance, so it can
@@ -2739,6 +2845,9 @@ type Instance struct {
 		Version *string `json:"version,omitempty"`
 	} `json:"status,omitempty"`
 }
+
+// InstanceSpecBackupStoragesSchedulesRetentionType Type selects count-based or time-based retention.
+type InstanceSpecBackupStoragesSchedulesRetentionType string
 
 // InstanceSpecComponentsResourcesLimits0 defines model for .
 type InstanceSpecComponentsResourcesLimits0 = int
@@ -2951,10 +3060,22 @@ type InstancePreset struct {
 					// per-backup-run.
 					Parameters *map[string]interface{} `json:"parameters,omitempty"`
 
-					// RetentionCopies RetentionCopies is the number of recent backups to keep for this
-					// schedule. Zero (or unset) means "keep all". Negative values are
-					// rejected.
-					RetentionCopies *int32 `json:"retentionCopies,omitempty"`
+					// Retention Retention configures count-based or time-based backup retention for
+					// this schedule. Unset keeps all backups.
+					Retention *struct {
+						// Count Count is the number of recent backups to keep when Type is count.
+						// Required when Type is count (minimum 1). Forbidden when Type is time.
+						// Omit Retention on the schedule to keep all backups.
+						Count *int32 `json:"count,omitempty"`
+
+						// Duration Duration is the recovery window when Type is time, in the form
+						// <positive-integer><unit> where unit is d (days), w (weeks), or m
+						// (months) — e.g. "30d", "4w", "2m". Forbidden when Type is count.
+						Duration *string `json:"duration,omitempty"`
+
+						// Type Type selects count-based or time-based retention.
+						Type InstancePresetSpecBackupStoragesSchedulesRetentionType `json:"type"`
+					} `json:"retention,omitempty"`
 				} `json:"schedules,omitempty"`
 
 				// StorageRef StorageRef references a BackupStorage in the same namespace. The
@@ -2975,9 +3096,6 @@ type InstancePreset struct {
 			// When unspecified, it is autmatically set from the ComponentVersions
 			// based on the Version specified.
 			Image *string `json:"image,omitempty"`
-
-			// Name Name of the component.
-			Name *string `json:"name,omitempty"`
 
 			// Parameters Parameters contains component-specific structured parameters, validated
 			// against the provider's components[].parametersSchema. Engine
@@ -3027,6 +3145,8 @@ type InstancePreset struct {
 				// Affinity Affinity constrains node selection, pod co-location and pod
 				// anti-affinity (spreading pods across nodes, zones or other topology
 				// domains for high availability).
+				// When omitted, the provider applies its default, which may require each
+				// replica on its own node; an empty affinity ({}) sets no constraints.
 				Affinity *struct {
 					// NodeAffinity Describes node affinity scheduling rules for the pod.
 					NodeAffinity *struct {
@@ -3569,7 +3689,9 @@ type InstancePreset struct {
 				} `json:"tolerations,omitempty"`
 
 				// TopologySpreadConstraints TopologySpreadConstraints describe how the pods spread across topology
-				// domains. All constraints are ANDed.
+				// domains. A constraint with neither labelSelector nor matchLabelKeys counts
+				// this component's pods. When omitted, the provider applies its default; an
+				// empty list sets no constraints.
 				TopologySpreadConstraints *[]struct {
 					// LabelSelector LabelSelector is used to find matching pods.
 					// Pods that match this label selector are counted to determine the number of pods
@@ -3913,6 +4035,9 @@ type InstancePreset struct {
 	} `json:"status,omitempty"`
 }
 
+// InstancePresetSpecBackupStoragesSchedulesRetentionType Type selects count-based or time-based retention.
+type InstancePresetSpecBackupStoragesSchedulesRetentionType string
+
 // InstancePresetSpecComponentsResourcesLimits0 defines model for .
 type InstancePresetSpecComponentsResourcesLimits0 = int
 
@@ -4149,7 +4274,16 @@ type Plugin struct {
 
 		// CompatibleHostVersions CompatibleHostVersions is a SemVer range expression specifying which
 		// OpenEverest host versions this plugin supports (e.g. ">=2.0.0 <3.0.0").
+		// This is the API-compatibility gate: it guards the host application version,
+		// which bumps for backend reasons unrelated to the UI runtime.
 		CompatibleHostVersions *string `json:"compatibleHostVersions,omitempty"`
+
+		// CompatibleUiContractVersions CompatibleUIContractVersions is a SemVer range expression specifying which
+		// UI-contract versions this plugin's frontend supports (e.g. "^18.0.0"). The
+		// UI contract is the shared React major — the only runtime a bundled-MUI
+		// plugin shares with the host (see issue #2661) — so this is checked
+		// separately from CompatibleHostVersions at load time.
+		CompatibleUiContractVersions *string `json:"compatibleUiContractVersions,omitempty"`
 
 		// Description Description is a short human-readable description of what the plugin does.
 		Description *string `json:"description,omitempty"`
@@ -4289,9 +4423,10 @@ type Provider struct {
 	// Spec ProviderSpec defines the desired state of Provider
 	Spec struct {
 		ComponentTypes *map[string]struct {
-			Versions *[]struct {
-				Default *bool `json:"default,omitempty"`
-
+			// DefaultVersion DefaultVersion names the entry in Versions used when neither the
+			// Instance nor a version bundle selects one.
+			DefaultVersion *string `json:"defaultVersion,omitempty"`
+			Versions       *[]struct {
 				// Deprecated Deprecated marks a version as still supported but scheduled for
 				// removal. Instances running on it get a proactive warning with a
 				// remediation runway instead of a blocked upgrade.
@@ -4328,6 +4463,10 @@ type Provider struct {
 			// UiSchema UISchema holds UI rendering hints for the configmap creation form.
 			UiSchema *map[string]interface{} `json:"uiSchema,omitempty"`
 		} `json:"configMaps,omitempty"`
+
+		// DefaultVersion DefaultVersion names the bundle in Versions used when an Instance
+		// omits Spec.Version.
+		DefaultVersion *string `json:"defaultVersion,omitempty"`
 
 		// ParametersSchema ParametersSchema declares the OpenAPI v3 schema for the instance-wide
 		// parameters payload (Instance.spec.parameters).
@@ -4403,15 +4542,11 @@ type Provider struct {
 		// Versions Versions defines curated version bundles — named sets of component
 		// versions that are known to be mutually compatible. Users reference
 		// a bundle via Instance.Spec.Version. If the user does not set a version,
-		// the bundle whose Default field is true is used automatically.
+		// the bundle named by DefaultVersion is used automatically.
 		Versions *[]struct {
 			// Components Components maps component names to their version strings for this bundle.
 			// Keys must match component names defined in ProviderSpec.Components.
 			Components *map[string]string `json:"components,omitempty"`
-
-			// Default Default marks this bundle as the implicit choice when an Instance omits
-			// Spec.Version entirely. Exactly one bundle should have Default: true.
-			Default *bool `json:"default,omitempty"`
 
 			// Name Name is the unique identifier for this bundle (e.g. "8.0.12").
 			// Users set Instance.Spec.Version to this value to select the bundle.

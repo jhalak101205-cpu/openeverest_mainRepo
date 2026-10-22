@@ -79,6 +79,31 @@ export interface components {
                          */
                         path: string;
                         /**
+                         * @description SourceMetadata is engine-specific metadata that is used to make
+                         *     compatibility decisions for creating an Instance from this Backup.
+                         */
+                        sourceMetadata?: {
+                            /**
+                             * @description BackupType is the backup method recorded (e.g. "logical" or "physical"
+                             *     for PBM).
+                             */
+                            backupType?: string;
+                            /**
+                             * @description EngineVersion is the engine version recorded in the backup.
+                             *     Its granularity may be whatever the backup metadata records, so it
+                             *     may be a full version (e.g. a MongoDB server version like "8.0.12-4",
+                             *     a Percona XtraDB Cluster server version like "8.4.8-8.1") or only a
+                             *     major version (e.g. a PostgreSQL version like "18").
+                             */
+                            engineVersion?: string;
+                            /**
+                             * @description Topology names the source Instance's topology (e.g. "replicaSet" or
+                             *     "sharded" for PSMDB). Recorded only for backups taken by a
+                             *     ProviderManaged backup class.
+                             */
+                            topology?: string;
+                        };
+                        /**
                          * Format: date-time
                          * @description StartedAt is the time when the backup started.
                          */
@@ -210,6 +235,32 @@ export interface components {
                  *     Empty for external backups.
                  */
                 size?: string;
+                /**
+                 * @description SourceMetadata is the source Instance metadata recorded with the backup.
+                 *     For external backups this mirrors spec.origin.external.sourceMetadata;
+                 *     for Instance-origin backups the provider populates it from the engine.
+                 */
+                sourceMetadata?: {
+                    /**
+                     * @description BackupType is the backup method recorded (e.g. "logical" or "physical"
+                     *     for PBM).
+                     */
+                    backupType?: string;
+                    /**
+                     * @description EngineVersion is the engine version recorded in the backup.
+                     *     Its granularity may be whatever the backup metadata records, so it
+                     *     may be a full version (e.g. a MongoDB server version like "8.0.12-4",
+                     *     a Percona XtraDB Cluster server version like "8.4.8-8.1") or only a
+                     *     major version (e.g. a PostgreSQL version like "18").
+                     */
+                    engineVersion?: string;
+                    /**
+                     * @description Topology names the source Instance's topology (e.g. "replicaSet" or
+                     *     "sharded" for PSMDB). Recorded only for backups taken by a
+                     *     ProviderManaged backup class.
+                     */
+                    topology?: string;
+                };
                 /**
                  * Format: date-time
                  * @description StartedAt is the time when the backup started.
@@ -497,6 +548,11 @@ export interface components {
                  */
                 supportedProviders?: string[];
                 /**
+                 * @description SupportsImport indicates whether the owner of this class can discover and
+                 *     import restorable backups already sitting in a BackupStorage.
+                 */
+                supportsImport?: boolean;
+                /**
                  * @description UISchema contains free-form rendering hints for the frontend forms that
                  *     configure backup, restore, and PITR for an Instance using this class.
                  *     The runtime treats this field as opaque; only the UI consumes it. The
@@ -656,7 +712,7 @@ export interface components {
                  * @description State is the current state of the backup import.
                  * @enum {string}
                  */
-                state?: "Succeeded" | "Failed" | "Error";
+                state?: "Pending" | "Succeeded" | "Failed" | "Error";
             };
         };
         /** @description BackupImportList is an object that contains the list of the existing backupimports. */
@@ -1039,12 +1095,30 @@ export interface components {
                              */
                             parameters?: Record<string, never>;
                             /**
-                             * Format: int32
-                             * @description RetentionCopies is the number of recent backups to keep for this
-                             *     schedule. Zero (or unset) means "keep all". Negative values are
-                             *     rejected.
+                             * @description Retention configures count-based or time-based backup retention for
+                             *     this schedule. Unset keeps all backups.
                              */
-                            retentionCopies?: number;
+                            retention?: {
+                                /**
+                                 * Format: int32
+                                 * @description Count is the number of recent backups to keep when Type is count.
+                                 *     Required when Type is count (minimum 1). Forbidden when Type is time.
+                                 *     Omit Retention on the schedule to keep all backups.
+                                 */
+                                count?: number;
+                                /**
+                                 * @description Duration is the recovery window when Type is time, in the form
+                                 *     <positive-integer><unit> where unit is d (days), w (weeks), or m
+                                 *     (months) — e.g. "30d", "4w", "2m". Forbidden when Type is count.
+                                 */
+                                duration?: string;
+                                /**
+                                 * @description Type selects count-based or time-based retention.
+                                 * @default count
+                                 * @enum {string}
+                                 */
+                                type: "count" | "time";
+                            };
                         }[];
                         /**
                          * @description StorageRef references a BackupStorage in the same namespace. The
@@ -1070,8 +1144,6 @@ export interface components {
                          *     based on the Version specified.
                          */
                         image?: string;
-                        /** @description Name of the component. */
-                        name?: string;
                         /**
                          * @description Parameters contains component-specific structured parameters, validated
                          *     against the provider's components[].parametersSchema. Engine
@@ -1136,6 +1208,8 @@ export interface components {
                              * @description Affinity constrains node selection, pod co-location and pod
                              *     anti-affinity (spreading pods across nodes, zones or other topology
                              *     domains for high availability).
+                             *     When omitted, the provider applies its default, which may require each
+                             *     replica on its own node; an empty affinity ({}) sets no constraints.
                              */
                             affinity?: {
                                 /** @description Describes node affinity scheduling rules for the pod. */
@@ -1778,7 +1852,9 @@ export interface components {
                             }[];
                             /**
                              * @description TopologySpreadConstraints describe how the pods spread across topology
-                             *     domains. All constraints are ANDed.
+                             *     domains. A constraint with neither labelSelector nor matchLabelKeys counts
+                             *     this component's pods. When omitted, the provider applies its default; an
+                             *     empty list sets no constraints.
                              */
                             topologySpreadConstraints?: {
                                 /**
@@ -2187,18 +2263,25 @@ export interface components {
                         };
                     }[];
                 };
-                /** @description Components is the status of the components in the database cluster. */
+                /** @description Components reports how many pods each component has and how many are Ready. */
                 components?: {
-                    /** @description PodRefs references the Pods backing this component. */
-                    podRefs?: {
-                        /** @description Name of the referenced object. */
-                        name: string;
-                    }[];
-                    /** Format: int32 */
-                    ready?: number;
-                    state?: string;
-                    /** Format: int32 */
-                    total?: number;
+                    /** @description Name is a key of spec.components. */
+                    name: string;
+                    /**
+                     * Format: int32
+                     * @description ReadyReplicas is the number of those pods that are Ready.
+                     */
+                    readyReplicas?: number;
+                    /**
+                     * Format: int32
+                     * @description Replicas is the number of the component's pods that are not terminating.
+                     */
+                    replicas?: number;
+                    /**
+                     * @description Selector selects the component's pods in the Instance's namespace, in
+                     *     the form kubectl get pods -l accepts.
+                     */
+                    selector?: string;
                 }[];
                 conditions?: {
                     /**
@@ -2255,6 +2338,13 @@ export interface components {
                 };
                 /** @description Message is a custom user-facing message describing the current state of the instance. */
                 message?: string;
+                /**
+                 * Format: int64
+                 * @description ObservedGeneration is the metadata.generation the provider-runtime last
+                 *     reconciled. Status describes an older spec while it is lower than
+                 *     metadata.generation.
+                 */
+                observedGeneration?: number;
                 /**
                  * @description PendingMaintenance lists the disruptive actions currently held awaiting
                  *     approval. It is recomputed on every reconcile from the actions the
@@ -2434,12 +2524,30 @@ export interface components {
                              */
                             parameters?: Record<string, never>;
                             /**
-                             * Format: int32
-                             * @description RetentionCopies is the number of recent backups to keep for this
-                             *     schedule. Zero (or unset) means "keep all". Negative values are
-                             *     rejected.
+                             * @description Retention configures count-based or time-based backup retention for
+                             *     this schedule. Unset keeps all backups.
                              */
-                            retentionCopies?: number;
+                            retention?: {
+                                /**
+                                 * Format: int32
+                                 * @description Count is the number of recent backups to keep when Type is count.
+                                 *     Required when Type is count (minimum 1). Forbidden when Type is time.
+                                 *     Omit Retention on the schedule to keep all backups.
+                                 */
+                                count?: number;
+                                /**
+                                 * @description Duration is the recovery window when Type is time, in the form
+                                 *     <positive-integer><unit> where unit is d (days), w (weeks), or m
+                                 *     (months) — e.g. "30d", "4w", "2m". Forbidden when Type is count.
+                                 */
+                                duration?: string;
+                                /**
+                                 * @description Type selects count-based or time-based retention.
+                                 * @default count
+                                 * @enum {string}
+                                 */
+                                type: "count" | "time";
+                            };
                         }[];
                         /**
                          * @description StorageRef references a BackupStorage in the same namespace. The
@@ -2465,8 +2573,6 @@ export interface components {
                          *     based on the Version specified.
                          */
                         image?: string;
-                        /** @description Name of the component. */
-                        name?: string;
                         /**
                          * @description Parameters contains component-specific structured parameters, validated
                          *     against the provider's components[].parametersSchema. Engine
@@ -2531,6 +2637,8 @@ export interface components {
                              * @description Affinity constrains node selection, pod co-location and pod
                              *     anti-affinity (spreading pods across nodes, zones or other topology
                              *     domains for high availability).
+                             *     When omitted, the provider applies its default, which may require each
+                             *     replica on its own node; an empty affinity ({}) sets no constraints.
                              */
                             affinity?: {
                                 /** @description Describes node affinity scheduling rules for the pod. */
@@ -3173,7 +3281,9 @@ export interface components {
                             }[];
                             /**
                              * @description TopologySpreadConstraints describe how the pods spread across topology
-                             *     domains. All constraints are ANDed.
+                             *     domains. A constraint with neither labelSelector nor matchLabelKeys counts
+                             *     this component's pods. When omitted, the provider applies its default; an
+                             *     empty list sets no constraints.
                              */
                             topologySpreadConstraints?: {
                                 /**
@@ -3780,8 +3890,18 @@ export interface components {
                 /**
                  * @description CompatibleHostVersions is a SemVer range expression specifying which
                  *     OpenEverest host versions this plugin supports (e.g. ">=2.0.0 <3.0.0").
+                 *     This is the API-compatibility gate: it guards the host application version,
+                 *     which bumps for backend reasons unrelated to the UI runtime.
                  */
                 compatibleHostVersions?: string;
+                /**
+                 * @description CompatibleUIContractVersions is a SemVer range expression specifying which
+                 *     UI-contract versions this plugin's frontend supports (e.g. "^18.0.0"). The
+                 *     UI contract is the shared React major — the only runtime a bundled-MUI
+                 *     plugin shares with the host (see issue #2661) — so this is checked
+                 *     separately from CompatibleHostVersions at load time.
+                 */
+                compatibleUiContractVersions?: string;
                 /** @description Description is a short human-readable description of what the plugin does. */
                 description?: string;
                 /** @description DisplayName is the human-readable name shown in the UI sidebar. */
@@ -3920,8 +4040,12 @@ export interface components {
             spec: {
                 componentTypes?: {
                     [key: string]: {
+                        /**
+                         * @description DefaultVersion names the entry in Versions used when neither the
+                         *     Instance nor a version bundle selects one.
+                         */
+                        defaultVersion?: string;
                         versions?: {
-                            default?: boolean;
                             /**
                              * @description Deprecated marks a version as still supported but scheduled for
                              *     removal. Instances running on it get a proactive warning with a
@@ -3970,6 +4094,11 @@ export interface components {
                         uiSchema?: Record<string, never>;
                     };
                 };
+                /**
+                 * @description DefaultVersion names the bundle in Versions used when an Instance
+                 *     omits Spec.Version.
+                 */
+                defaultVersion?: string;
                 /**
                  * @description ParametersSchema declares the OpenAPI v3 schema for the instance-wide
                  *     parameters payload (Instance.spec.parameters).
@@ -4063,7 +4192,7 @@ export interface components {
                  * @description Versions defines curated version bundles — named sets of component
                  *     versions that are known to be mutually compatible. Users reference
                  *     a bundle via Instance.Spec.Version. If the user does not set a version,
-                 *     the bundle whose Default field is true is used automatically.
+                 *     the bundle named by DefaultVersion is used automatically.
                  */
                 versions?: {
                     /**
@@ -4073,11 +4202,6 @@ export interface components {
                     components?: {
                         [key: string]: string;
                     };
-                    /**
-                     * @description Default marks this bundle as the implicit choice when an Instance omits
-                     *     Spec.Version entirely. Exactly one bundle should have Default: true.
-                     */
-                    default?: boolean;
                     /**
                      * @description Name is the unique identifier for this bundle (e.g. "8.0.12").
                      *     Users set Instance.Spec.Version to this value to select the bundle.
